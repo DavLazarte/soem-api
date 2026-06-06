@@ -1,0 +1,27 @@
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+
+class Setting extends Model
+{
+    protected $fillable = ['key', 'value', 'description'];
+
+    // Claves disponibles
+    const SALDO_ACUMULABLE   = 'saldo_acumulable';
+    const PERMITE_NEGATIVO   = 'permite_negativo';
+    const TOPE_NEGATIVO      = 'tope_negativo_default';
+
+    // Helper estático para leer config fácil desde cualquier lado
+    public static function get(string $key, $default = null)
+    {
+        $setting = static::where('key', $key)->first();
+        return $setting ? $setting->value : $default;
+    }
+
+    public static function set(string $key, $value): void
+    {
+        static::updateOrCreate(['key' => $key], ['value' => $value]);
+    }
+}
