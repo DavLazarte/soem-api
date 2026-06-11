@@ -17,7 +17,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // ─── SOCIO ───────────────────────────────────────────────────
     Route::middleware('role:socio')->prefix('socio')->group(function () {
         Route::get('/dashboard', [SocioController::class, 'dashboard']);
-        Route::get('/transacciones', [SocioController::class, 'transacciones']);
+        Route::get('/movimientos', [SocioController::class, 'movimientos']);
         Route::get('/acreditaciones', [SocioController::class, 'acreditaciones']);
         Route::put('/password', [SocioController::class, 'updatePassword']);
     });
@@ -38,6 +38,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/dashboard', [AdminController::class, 'dashboard']);
 
         // Socios CRUD
+        Route::get('/socios/next-legajo', [AdminController::class, 'nextLegajo']);
         Route::get('/socios', [AdminController::class, 'indexSocios']);
         Route::post('/socios', [AdminController::class, 'storeSocio']);
         Route::put('/socios/{id}', [AdminController::class, 'updateSocio']);
@@ -52,14 +53,19 @@ Route::middleware('auth:sanctum')->group(function () {
         // Acreditaciones
         Route::post('/acreditaciones/masiva', [AdminController::class, 'acreditacionMasiva']);
         Route::get('/acreditaciones', [AdminController::class, 'acreditaciones']);
-
-        // Transacciones
         Route::get('/transacciones', [AdminController::class, 'transacciones']);
+        Route::get('/cuotas', [AdminController::class, 'cuotas']);
         Route::post('/transacciones/{id}/anular', [AdminController::class, 'anularTransaccion']);
 
         // Periodos
         Route::get('/periodos', [AdminController::class, 'periodos']);
         Route::post('/periodos', [AdminController::class, 'crearPeriodo']);
+
+        // Préstamos (Financiera)
+        Route::get('/prestamos', [AdminController::class, 'indexPrestamos']);
+        Route::post('/prestamos', [AdminController::class, 'storePrestamo']);
+        Route::post('/prestamos/cuotas/{id}/toggle', [AdminController::class, 'pagarCuotaPrestamo']);
+        Route::delete('/prestamos/{id}', [AdminController::class, 'cancelarPrestamo']);
 
         // Audit logs
         Route::get('/audit-logs', [AdminController::class, 'auditLogs']);

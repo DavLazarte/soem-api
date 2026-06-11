@@ -27,12 +27,51 @@ class PrestadorController extends Controller
             ->limit(10)
             ->get();
 
+        $cuotasPendientes = Cuota::where('estado', 'pendiente')
+            ->whereHas('transaccion', function ($q) use ($prestador) {
+                $q->where('prestador_id', $prestador->id);
+            })
+            ->with(['transaccion.socio:id,nombre,apellido,legajo', 'periodo:id,nombre'])
+            ->orderBy('periodo_id')
+            ->get();
+
+        $cuotasCobradas = Cuota::where('estado', 'cobrada')
+            ->whereNotNull('cobrada_en')
+            ->whereHas('transaccion', function ($q) use ($prestador) {
+                $q->where('prestador_id', $prestador->id);
+            })
+            ->with(['transaccion.socio:id,nombre,apellido,legajo', 'periodo:id,nombre'])
+            ->orderByDesc('cobrada_en')
+            ->limit(50)
+            ->get();
+
+        $mesActual = now()->month;
+        $anioActual = now()->year;
+
+        $transaccionesUnPagoMes = Transaccion::where('prestador_id', $prestador->id)
+            ->whereMonth('created_at', $mesActual)
+            ->whereYear('created_at', $anioActual)
+            ->where('estado', 'confirmada')
+            ->where('es_cuotas', false);
+
+        $cuotasCobradasMesMonto = Cuota::whereHas('transaccion', function($q) use ($prestador) {
+                $q->where('prestador_id', $prestador->id);
+            })
+            ->whereMonth('cobrada_en', $mesActual)
+            ->whereYear('cobrada_en', $anioActual)
+            ->where('estado', 'cobrada')
+            ->sum('monto');
+
+        $total_cobrado = (clone $transaccionesUnPagoMes)->sum('monto_total') + $cuotasCobradasMesMonto;
+
         return response()->json([
             'success' => true,
             'data'    => [
-                'total_cobrado'       => $transaccionesDelMes->sum('monto_total'),
+                'total_cobrado'          => $total_cobrado,
                 'cantidad_transacciones' => $transaccionesDelMes->count(),
-                'transacciones'       => $ultimasTransacciones,
+                'transacciones'          => $ultimasTransacciones,
+                'cuotas_pendientes'      => $cuotasPendientes,
+                'cuotas_cobradas'        => $cuotasCobradas,
             ],
         ]);
     }

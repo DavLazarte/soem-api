@@ -9,9 +9,7 @@ class Setting extends Model
     protected $fillable = ['key', 'value', 'description'];
 
     // Claves disponibles
-    const SALDO_ACUMULABLE   = 'saldo_acumulable';
-    const PERMITE_NEGATIVO   = 'permite_negativo';
-    const TOPE_NEGATIVO      = 'tope_negativo_default';
+    const MONTO_DEPOSITO_DEFAULT = 'monto_deposito_default';
 
     // Helper estático para leer config fácil desde cualquier lado
     public static function get(string $key, $default = null)

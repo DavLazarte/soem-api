@@ -26,6 +26,10 @@ class Transaccion extends Model
         'es_cuotas'   => 'boolean',
     ];
 
+    protected $appends = [
+        'monto_cobrado'
+    ];
+
     public function socio()
     {
         return $this->belongsTo(Socio::class);
@@ -58,5 +62,15 @@ class Transaccion extends Model
             ->where('periodo_id', $periodo->id)
             ->where('estado', 'pendiente')
             ->first();
+    }
+
+    public function getMontoCobradoAttribute()
+    {
+        if (!$this->es_cuotas) {
+            return $this->estado === 'confirmada' ? $this->monto_total : 0;
+        }
+
+        // Sum of all paid quotas
+        return $this->cuotas()->where('estado', 'cobrada')->sum('monto');
     }
 }

@@ -19,16 +19,14 @@ class Socio extends Model
         'celular',
         'estado',
         'saldo_disponible',
-        'permite_negativo',
-        'tope_negativo',
-        'acumula_saldo',
+        'deposito_automatico',
+        'saldo_anterior',
     ];
 
     protected $casts = [
-        'saldo_disponible' => 'decimal:2',
-        'tope_negativo'    => 'decimal:2',
-        'permite_negativo' => 'boolean',
-        'acumula_saldo'    => 'boolean',
+        'saldo_disponible'    => 'decimal:2',
+        'saldo_anterior'      => 'decimal:2',
+        'deposito_automatico' => 'boolean',
     ];
 
     // Relaciones
@@ -47,6 +45,11 @@ class Socio extends Model
         return $this->hasMany(Transaccion::class);
     }
 
+    public function prestamos()
+    {
+        return $this->hasMany(Prestamo::class);
+    }
+
     // Helpers
     public function nombreCompleto(): string
     {
@@ -55,10 +58,6 @@ class Socio extends Model
 
     public function tieneSaldoDisponible(float $monto): bool
     {
-        if ($this->permite_negativo) {
-            $tope = $this->tope_negativo ?? Setting::get(Setting::TOPE_NEGATIVO, 0);
-            return ($this->saldo_disponible - $monto) >= ($tope * -1);
-        }
         return $this->saldo_disponible >= $monto;
     }
 
