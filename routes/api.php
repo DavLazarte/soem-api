@@ -28,8 +28,12 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/socios/buscar', [PrestadorController::class, 'buscarSocio']);
         Route::post('/transacciones', [PrestadorController::class, 'registrarCompra']);
         Route::put('/transacciones/{id}', [PrestadorController::class, 'editarTransaccion']);
+        Route::post('/transacciones/{id}/anular', [PrestadorController::class, 'anularTransaccion']);
         Route::get('/transacciones', [PrestadorController::class, 'transacciones']);
         Route::post('/cuotas/{id}/cobrar', [PrestadorController::class, 'cobrarCuota']);
+        Route::get('/cuotas-viejas', [PrestadorController::class, 'indexCuotasViejas']);
+        Route::post('/cuotas-viejas', [PrestadorController::class, 'storeCuotasViejas']);
+        Route::put('/perfil', [PrestadorController::class, 'updatePerfil']);
     });
 
     // ─── ADMIN ───────────────────────────────────────────────────

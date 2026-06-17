@@ -49,71 +49,118 @@ class SocioController extends Controller
     {
         $movs = collect();
 
+        // ── Acreditaciones (depósitos) ──
         foreach ($socio->acreditaciones as $a) {
             $movs->push([
-                'id' => 'a_'.$a->id,
-                'tipo' => 'acreditacion',
+                'id'     => 'a_'.$a->id,
+                'tipo'   => 'acreditacion',
                 'titulo' => 'Depósito de saldo',
-                'monto' => $a->monto,
-                'signo' => '+',
+                'monto'  => $a->monto,
+                'signo'  => '+',
                 'estado' => 'completado',
-                'fecha' => $a->created_at->toIso8601String(),
+                'fecha'  => $a->created_at->toIso8601String(),
             ]);
         }
 
+        // ── Compras de 1 pago (excluir tipo='manual' que son cargas viejas) ──
         foreach ($socio->transacciones()->where('es_cuotas', false)->with('prestador')->get() as $t) {
-            $movs->push([
-                'id' => 't_'.$t->id,
-                'tipo' => 'compra',
-                'titulo' => 'Compra en ' . ($t->prestador->nombre ?? 'Negocio'),
-                'monto' => $t->monto_total,
-                'signo' => '-',
-                'estado' => $t->estado,
-                'fecha' => $t->created_at->toIso8601String(),
-            ]);
+            if ($t->estado === 'anulada') {
+                // Mostrar anulación con devolución
+                $movs->push([
+                    'id'     => 't_anul_'.$t->id,
+                    'tipo'   => 'acreditacion',
+                    'titulo' => 'Devolución de ' . ($t->prestador->nombre ?? 'Negocio'),
+                    'monto'  => $t->monto_total,
+                    'signo'  => '+',
+                    'estado' => 'devuelto',
+                    'fecha'  => $t->updated_at->toIso8601String(),
+                ]);
+            } else {
+                $movs->push([
+                    'id'     => 't_'.$t->id,
+                    'tipo'   => 'compra',
+                    'titulo' => 'Compra en ' . ($t->prestador->nombre ?? 'Negocio'),
+                    'monto'  => $t->monto_total,
+                    'signo'  => '-',
+                    'estado' => $t->estado,
+                    'fecha'  => $t->created_at->toIso8601String(),
+                ]);
+            }
         }
 
+        // ── Cuotas cobradas ──
         $cuotas = \App\Models\Cuota::whereHas('transaccion', function($q) use ($socio) {
             $q->where('socio_id', $socio->id);
         })->where('estado', 'cobrada')->with('transaccion.prestador', 'periodo')->get();
-        
+
         foreach ($cuotas as $c) {
             $movs->push([
-                'id' => 'c_'.$c->id,
-                'tipo' => 'cuota',
+                'id'     => 'c_'.$c->id,
+                'tipo'   => 'cuota',
                 'titulo' => 'Cuota ' . $c->nro_cuota . ' - ' . ($c->transaccion->prestador->nombre ?? 'Negocio'),
-                'monto' => $c->monto,
-                'signo' => '-',
+                'monto'  => $c->monto,
+                'signo'  => '-',
                 'estado' => 'cobrada',
-                'fecha' => ($c->cobrada_en ? \Carbon\Carbon::parse($c->cobrada_en) : $c->updated_at)->toIso8601String(),
+                'fecha'  => ($c->cobrada_en ? \Carbon\Carbon::parse($c->cobrada_en) : $c->updated_at)->toIso8601String(),
             ]);
         }
 
+        // ── Ajustes por edición de ventas (usando AuditLog) ──
+        $transaccionIds = \App\Models\Transaccion::where('socio_id', $socio->id)->pluck('id');
+        $ediciones = \App\Models\AuditLog::where('accion', 'edicion_transaccion')
+            ->whereIn('modelo_id', $transaccionIds)
+            ->get();
+
+        foreach ($ediciones as $edit) {
+            $montoAntes = (float)($edit->valores_antes['monto_total'] ?? 0);
+            $montoAhora = (float)($edit->valores_despues['monto_total'] ?? 0);
+            $diferencia = $montoAhora - $montoAntes;
+
+            if (abs($diferencia) < 0.01) continue;
+
+            $transaccion = \App\Models\Transaccion::with('prestador:id,nombre')->find($edit->modelo_id);
+            $nombreNegocio = $transaccion?->prestador?->nombre ?? 'Negocio';
+
+            $movs->push([
+                'id'     => 'adj_'.$edit->id,
+                'tipo'   => 'ajuste',
+                'titulo' => $diferencia < 0
+                    ? $nombreNegocio . ' te reintegró dinero'
+                    : 'Cargo adicional de ' . $nombreNegocio,
+                'monto'  => abs($diferencia),
+                'signo'  => $diferencia < 0 ? '+' : '-',
+                'estado' => 'aplicado',
+                'fecha'  => $edit->created_at->toIso8601String(),
+            ]);
+        }
+
+        // ── Préstamos otorgados ──
         foreach ($socio->prestamos as $p) {
             $movs->push([
-                'id' => 'p_'.$p->id,
-                'tipo' => 'prestamo',
+                'id'     => 'p_'.$p->id,
+                'tipo'   => 'prestamo',
                 'titulo' => 'Préstamo otorgado',
-                'monto' => $p->monto_total,
-                'signo' => '+',
+                'monto'  => $p->monto_total,
+                'signo'  => '+',
                 'estado' => $p->estado,
-                'fecha' => $p->created_at->toIso8601String(),
+                'fecha'  => $p->created_at->toIso8601String(),
             ]);
         }
 
+        // ── Cuotas préstamo pagadas ──
         $cuotasP = \App\Models\CuotaPrestamo::whereHas('prestamo', function($q) use ($socio) {
             $q->where('socio_id', $socio->id);
         })->where('estado', 'pagada')->get();
 
         foreach ($cuotasP as $cp) {
             $movs->push([
-                'id' => 'cp_'.$cp->id,
-                'tipo' => 'cuota_prestamo',
+                'id'     => 'cp_'.$cp->id,
+                'tipo'   => 'cuota_prestamo',
                 'titulo' => 'Pago cuota préstamo ' . $cp->nro_cuota,
-                'monto' => $cp->monto,
-                'signo' => '-',
+                'monto'  => $cp->monto,
+                'signo'  => '-',
                 'estado' => 'pagada',
-                'fecha' => ($cp->pagada_en ? \Carbon\Carbon::parse($cp->pagada_en) : $cp->updated_at)->toIso8601String(),
+                'fecha'  => ($cp->pagada_en ? \Carbon\Carbon::parse($cp->pagada_en) : $cp->updated_at)->toIso8601String(),
             ]);
         }
 

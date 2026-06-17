@@ -13,7 +13,7 @@ class Transaccion extends Model
         'socio_id',
         'prestador_id',
         'periodo_id',
-        'tipo',
+        'tipo',         // compra | anulacion | ajuste | manual
         'monto_total',
         'estado',
         'es_cuotas',
@@ -48,6 +48,11 @@ class Transaccion extends Model
     public function cuotas()
     {
         return $this->hasMany(Cuota::class);
+    }
+
+    public function auditLogs()
+    {
+        return $this->hasMany(AuditLog::class, 'modelo_id')->where('modelo', 'Transaccion');
     }
 
     public function anuladaPor()

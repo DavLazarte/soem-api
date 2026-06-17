@@ -9,6 +9,7 @@ use App\Models\Socio;
 use App\Models\Transaccion;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
 
 class PrestadorController extends Controller
 {
@@ -275,7 +276,9 @@ class PrestadorController extends Controller
         $prestador = $request->user()->prestador;
 
         $query = $prestador->transacciones()
-            ->with(['socio:id,nombre,apellido,legajo', 'cuotas']);
+            ->with(['socio:id,nombre,apellido,legajo', 'cuotas', 'auditLogs' => function($q) {
+                $q->where('accion', 'edicion_transaccion')->orderBy('created_at', 'asc');
+            }]);
 
         if ($request->filled('search')) {
             $search = $request->search;
@@ -283,6 +286,157 @@ class PrestadorController extends Controller
                 $qSocio->where('nombre', 'like', "%{$search}%")
                        ->orWhere('apellido', 'like', "%{$search}%")
                        ->orWhere('legajo', 'like', "%{$search}%");
+            });
+        }
+
+        if ($request->filled('fecha_desde')) {
+            $query->whereDate('created_at', '>=', $request->fecha_desde);
+        }
+        if ($request->filled('fecha_hasta')) {
+            $query->whereDate('created_at', '<=', $request->fecha_hasta);
+        }
+
+        if ($request->boolean('unpaginated')) {
+            $transacciones = $query->orderByDesc('created_at')->get();
+        } else {
+            $transacciones = $query->orderByDesc('created_at')->paginate(15);
+        }
+
+        return response()->json([
+            'success' => true,
+            'data'    => $transacciones,
+        ]);
+    }
+
+    /**
+     * Anular a transaction (prestador can only anular their own).
+     */
+    public function anularTransaccion(Request $request, $id)
+    {
+        $prestador = $request->user()->prestador;
+
+        $transaccion = Transaccion::where('id', $id)
+            ->where('prestador_id', $prestador->id)
+            ->firstOrFail();
+
+        if ($transaccion->estado === 'anulada') {
+            return response()->json([
+                'success' => false,
+                'message' => 'La transacción ya fue anulada.',
+            ], 422);
+        }
+
+        $request->validate([
+            'motivo_anulacion' => 'required|string|max:500',
+        ]);
+
+        DB::transaction(function () use ($transaccion, $request) {
+            $socio = $transaccion->socio;
+
+            // Devolver saldo al socio
+            if ($transaccion->es_cuotas) {
+                // Solo devolver las cuotas ya cobradas
+                $montoCobrado = $transaccion->cuotas()
+                    ->where('estado', 'cobrada')
+                    ->sum('monto');
+                if ($montoCobrado > 0) {
+                    $socio->increment('saldo_disponible', $montoCobrado);
+                }
+                // Anular cuotas pendientes
+                $transaccion->cuotas()
+                    ->where('estado', 'pendiente')
+                    ->update(['estado' => 'anulada']);
+            } else {
+                $socio->increment('saldo_disponible', $transaccion->monto_total);
+            }
+
+            $transaccion->update([
+                'estado'           => 'anulada',
+                'motivo_anulacion' => $request->motivo_anulacion,
+                'anulada_por'      => $request->user()->id,
+            ]);
+        });
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Venta anulada correctamente.',
+            'data'    => $transaccion->fresh(['socio:id,nombre,apellido,legajo']),
+        ]);
+    }
+
+    /**
+     * Load old pending quotas (cuotas viejas) for a socio.
+     * No saldo is deducted — these are future pending charges.
+     */
+    public function storeCuotasViejas(Request $request)
+    {
+        $request->validate([
+            'socio_id'        => 'required|exists:socios,id',
+            'cantidad_cuotas' => 'required|integer|min:1|max:36',
+            'monto_cuota'     => 'required|numeric|min:0.01',
+        ]);
+
+        $prestador = $request->user()->prestador;
+        $periodo   = Periodo::actual();
+
+        $transaccion = DB::transaction(function () use ($request, $prestador, $periodo) {
+            $montoTotal = round($request->cantidad_cuotas * $request->monto_cuota, 2);
+
+            $transaccion = Transaccion::create([
+                'socio_id'     => $request->socio_id,
+                'prestador_id' => $prestador->id,
+                'periodo_id'   => $periodo->id,
+                'tipo'         => 'manual',
+                'monto_total'  => $montoTotal,
+                'estado'       => 'confirmada',
+                'es_cuotas'    => true,
+            ]);
+
+            for ($i = 1; $i <= $request->cantidad_cuotas; $i++) {
+                $fechaCuota   = now()->addMonths($i - 1);
+                $periodoCuota = Periodo::firstOrCreate(
+                    ['mes' => $fechaCuota->month, 'anio' => $fechaCuota->year],
+                    ['nombre' => ucfirst($fechaCuota->translatedFormat('F Y')), 'estado' => 'abierto']
+                );
+
+                Cuota::create([
+                    'transaccion_id' => $transaccion->id,
+                    'periodo_id'     => $periodoCuota->id,
+                    'nro_cuota'      => $i,
+                    'monto'          => $request->monto_cuota,
+                    'estado'         => 'pendiente',
+                    'cobrada_en'     => null,
+                ]);
+            }
+
+            return $transaccion;
+        });
+
+        $transaccion->load(['socio:id,nombre,apellido,legajo', 'cuotas.periodo:id,nombre']);
+
+        return response()->json([
+            'success' => true,
+            'data'    => $transaccion,
+        ], 201);
+    }
+
+    /**
+     * List cuotas viejas (tipo=manual) for this prestador.
+     */
+    public function indexCuotasViejas(Request $request)
+    {
+        $prestador = $request->user()->prestador;
+
+        $query = Transaccion::where('prestador_id', $prestador->id)
+            ->where('tipo', 'manual')
+            ->with(['socio:id,nombre,apellido,legajo', 'cuotas.periodo:id,nombre']);
+
+        if ($request->filled('search')) {
+            $search = $request->search;
+            $query->whereHas('socio', function($q) use ($search) {
+                $q->where('nombre', 'like', "%{$search}%")
+                  ->orWhere('apellido', 'like', "%{$search}%")
+                  ->orWhere('legajo', 'like', "%{$search}%");
             });
         }
 
@@ -331,6 +485,44 @@ class PrestadorController extends Controller
             'success' => true,
             'message' => 'Cuota cobrada exitosamente.',
             'data'    => $cuota,
+        ]);
+    }
+
+    /**
+     * Update prestador's profile (direccion, telefono) and optionally password.
+     */
+    public function updatePerfil(Request $request)
+    {
+        $prestador = $request->user()->prestador;
+
+        $request->validate([
+            'direccion'        => 'nullable|string|max:500',
+            'telefono'         => 'nullable|string|max:50',
+            'current_password' => 'nullable|string',
+            'password'         => 'nullable|string|min:6|confirmed',
+        ]);
+
+        $prestador->update($request->only(['direccion', 'telefono']));
+
+        if ($request->filled('password')) {
+            $user = $request->user();
+
+            if (!$request->filled('current_password') || !Hash::check($request->current_password, $user->password)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'La contraseña actual es incorrecta.',
+                ], 422);
+            }
+
+            $user->update(['password' => $request->password]);
+        }
+
+        $prestador->load('user:id,name,username,email,estado');
+
+        return response()->json([
+            'success' => true,
+            'data'    => $prestador,
+            'message' => 'Perfil actualizado correctamente.',
         ]);
     }
 }
