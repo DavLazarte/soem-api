@@ -129,14 +129,16 @@ class PrestadorController extends Controller
             'monto_total'     => 'required|numeric|min:0.01',
             'es_cuotas'       => 'required|boolean',
             'cantidad_cuotas' => 'required_if:es_cuotas,true|integer|min:2|max:24',
+            'detalle'         => 'nullable|string|max:1000',
+            'cobro_diferido'  => 'nullable|boolean',
         ]);
 
         $socio = Socio::findOrFail($request->socio_id);
 
-        // For installments, check balance against first cuota only
+        // For installments, check balance against first cuota only (unless deferred)
         if ($request->es_cuotas) {
             $montoPrimeraCuota = round($request->monto_total / $request->cantidad_cuotas, 2);
-            $montoAVerificar = $montoPrimeraCuota;
+            $montoAVerificar = $request->cobro_diferido ? 0 : $montoPrimeraCuota;
         } else {
             $montoAVerificar = $request->monto_total;
         }
@@ -160,11 +162,14 @@ class PrestadorController extends Controller
                 'monto_total'  => $request->monto_total,
                 'estado'       => 'confirmada',
                 'es_cuotas'    => $request->es_cuotas,
+                'detalle'      => $request->detalle,
             ]);
 
             if ($request->es_cuotas) {
                 $cantidadCuotas = $request->cantidad_cuotas;
                 $montoCuota     = round($request->monto_total / $cantidadCuotas, 2);
+
+                $mesInicio = $request->cobro_diferido ? 1 : 0;
 
                 for ($i = 1; $i <= $cantidadCuotas; $i++) {
                     // Adjust last cuota to avoid rounding differences
@@ -172,7 +177,7 @@ class PrestadorController extends Controller
                         ? $request->monto_total - ($montoCuota * ($cantidadCuotas - 1))
                         : $montoCuota;
 
-                    $fechaCuota = now()->addMonths($i - 1);
+                    $fechaCuota = now()->addMonths($mesInicio + $i - 1);
                     $periodoCuota = Periodo::firstOrCreate(
                         ['mes' => $fechaCuota->month, 'anio' => $fechaCuota->year],
                         ['nombre' => ucfirst($fechaCuota->translatedFormat('F Y')), 'estado' => 'abierto']
@@ -183,13 +188,15 @@ class PrestadorController extends Controller
                         'periodo_id'     => $periodoCuota->id,
                         'nro_cuota'      => $i,
                         'monto'          => $monto,
-                        'estado'         => ($i === 1) ? 'cobrada' : 'pendiente',
-                        'cobrada_en'     => ($i === 1) ? now() : null,
+                        'estado'         => ($i === 1 && !$request->cobro_diferido) ? 'cobrada' : 'pendiente',
+                        'cobrada_en'     => ($i === 1 && !$request->cobro_diferido) ? now() : null,
                     ]);
                 }
 
-                // Only deduct first cuota from saldo
-                $socio->decrement('saldo_disponible', $montoCuota);
+                // Only deduct first cuota from saldo if not deferred
+                if (!$request->cobro_diferido) {
+                    $socio->decrement('saldo_disponible', $montoCuota);
+                }
             } else {
                 $socio->decrement('saldo_disponible', $request->monto_total);
             }
@@ -224,7 +231,8 @@ class PrestadorController extends Controller
         }
 
         $request->validate([
-            'monto_total' => 'required|numeric|min:0.01',
+            'monto_total'    => 'required|numeric|min:0.01',
+            'motivo_edicion' => 'required|string|max:1000',
         ]);
 
         $montoAnterior = (float) $transaccion->monto_total;
@@ -257,7 +265,11 @@ class PrestadorController extends Controller
                 ['monto_total' => $montoNuevo]
             );
 
-            $transaccion->update(['monto_total' => $montoNuevo]);
+            $transaccion->update([
+                'monto_total'    => $montoNuevo,
+                'editada_por'    => request()->user()->id,
+                'motivo_edicion' => request()->motivo_edicion,
+            ]);
         });
 
         $transaccion->load(['socio:id,nombre,apellido,legajo', 'prestador:id,nombre']);
@@ -278,7 +290,7 @@ class PrestadorController extends Controller
         $query = $prestador->transacciones()
             ->with(['socio:id,nombre,apellido,legajo', 'cuotas', 'auditLogs' => function($q) {
                 $q->where('accion', 'edicion_transaccion')->orderBy('created_at', 'asc');
-            }]);
+            }, 'editadaPor:id,name']);
 
         if ($request->filled('search')) {
             $search = $request->search;
@@ -418,6 +430,88 @@ class PrestadorController extends Controller
             'success' => true,
             'data'    => $transaccion,
         ], 201);
+    }
+
+    /**
+     * List all pending cuotas for this prestador.
+     */
+    public function cuotasPendientes(Request $request)
+    {
+        $prestador = $request->user()->prestador;
+
+        $query = Cuota::where('estado', 'pendiente')
+            ->whereHas('transaccion', function($q) use ($prestador) {
+                $q->where('prestador_id', $prestador->id)
+                  ->where('estado', 'confirmada');
+            })
+            ->with(['transaccion.socio:id,nombre,apellido,legajo,saldo_disponible', 'periodo:id,nombre']);
+
+        if ($request->filled('search')) {
+            $search = $request->search;
+            $query->whereHas('transaccion.socio', function($q) use ($search) {
+                $q->where('nombre', 'like', "%{$search}%")
+                  ->orWhere('apellido', 'like', "%{$search}%")
+                  ->orWhere('legajo', 'like', "%{$search}%");
+            });
+        }
+
+        $cuotas = $query->orderBy('periodo_id')->paginate(50);
+
+        return response()->json([
+            'success' => true,
+            'data'    => $cuotas,
+        ]);
+    }
+
+    /**
+     * Charge multiple pending cuotas (bulk processing).
+     */
+    public function cobrarCuotasMasivo(Request $request)
+    {
+        $prestador = $request->user()->prestador;
+
+        $request->validate([
+            'cuota_ids' => 'required|array',
+            'cuota_ids.*' => 'integer',
+        ]);
+
+        $cuotas = Cuota::whereIn('id', $request->cuota_ids)
+            ->where('estado', 'pendiente')
+            ->whereHas('transaccion', function($q) use ($prestador) {
+                $q->where('prestador_id', $prestador->id)
+                  ->where('estado', 'confirmada');
+            })
+            ->with('transaccion.socio')
+            ->get();
+
+        $cobradas = 0;
+        $fallidas = 0;
+
+        foreach ($cuotas as $cuota) {
+            $socio = $cuota->transaccion->socio;
+
+            if ($socio->tieneSaldoDisponible($cuota->monto)) {
+                DB::transaction(function () use ($cuota, $socio) {
+                    $socio->decrement('saldo_disponible', $cuota->monto);
+                    $cuota->update([
+                        'estado'     => 'cobrada',
+                        'cobrada_en' => now(),
+                    ]);
+                });
+                $cobradas++;
+            } else {
+                $fallidas++;
+            }
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => "Proceso finalizado. $cobradas cobradas exitosamente. $fallidas fallaron por falta de saldo.",
+            'data'    => [
+                'cobradas' => $cobradas,
+                'fallidas' => $fallidas,
+            ],
+        ]);
     }
 
     /**

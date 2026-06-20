@@ -74,6 +74,7 @@ class SocioController extends Controller
                     'signo'  => '+',
                     'estado' => 'devuelto',
                     'fecha'  => $t->updated_at->toIso8601String(),
+                    'detalle' => $t->motivo_anulacion ? 'Motivo: ' . $t->motivo_anulacion : null,
                 ]);
             } else {
                 $movs->push([
@@ -84,6 +85,7 @@ class SocioController extends Controller
                     'signo'  => '-',
                     'estado' => $t->estado,
                     'fecha'  => $t->created_at->toIso8601String(),
+                    'detalle' => $t->detalle,
                 ]);
             }
         }
@@ -131,6 +133,7 @@ class SocioController extends Controller
                 'signo'  => $diferencia < 0 ? '+' : '-',
                 'estado' => 'aplicado',
                 'fecha'  => $edit->created_at->toIso8601String(),
+                'detalle' => $transaccion?->motivo_edicion ? 'Motivo: ' . $transaccion->motivo_edicion : null,
             ]);
         }
 

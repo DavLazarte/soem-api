@@ -31,6 +31,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/transacciones/{id}/anular', [PrestadorController::class, 'anularTransaccion']);
         Route::get('/transacciones', [PrestadorController::class, 'transacciones']);
         Route::post('/cuotas/{id}/cobrar', [PrestadorController::class, 'cobrarCuota']);
+        Route::get('/cuotas/pendientes', [PrestadorController::class, 'cuotasPendientes']);
+        Route::post('/cuotas/cobrar-masivo', [PrestadorController::class, 'cobrarCuotasMasivo']);
         Route::get('/cuotas-viejas', [PrestadorController::class, 'indexCuotasViejas']);
         Route::post('/cuotas-viejas', [PrestadorController::class, 'storeCuotasViejas']);
         Route::put('/perfil', [PrestadorController::class, 'updatePerfil']);
