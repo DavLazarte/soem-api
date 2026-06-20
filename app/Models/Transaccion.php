@@ -17,8 +17,11 @@ class Transaccion extends Model
         'monto_total',
         'estado',
         'es_cuotas',
+        'detalle',
         'anulada_por',
         'motivo_anulacion',
+        'editada_por',
+        'motivo_edicion',
     ];
 
     protected $casts = [
@@ -58,6 +61,11 @@ class Transaccion extends Model
     public function anuladaPor()
     {
         return $this->belongsTo(User::class, 'anulada_por');
+    }
+
+    public function editadaPor()
+    {
+        return $this->belongsTo(User::class, 'editada_por');
     }
 
     public function cuotaPendienteDelMes()
