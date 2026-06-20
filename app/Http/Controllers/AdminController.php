@@ -207,6 +207,19 @@ class AdminController extends Controller
         ]);
     }
 
+    public function resetPasswordSocio($id)
+    {
+        $socio = Socio::findOrFail($id);
+        $user = $socio->user;
+        $user->password = Hash::make($socio->legajo);
+        $user->save();
+
+        return response()->json([
+            'success' => true,
+            'message' => "Contraseña restaurada al legajo ({$socio->legajo}).",
+        ]);
+    }
+
     // ─── PRESTADORES CRUD ────────────────────────────────────
 
     public function indexPrestadores(Request $request)
@@ -309,6 +322,19 @@ class AdminController extends Controller
         return response()->json([
             'success' => true,
             'data'    => ['message' => 'Prestador eliminado correctamente.'],
+        ]);
+    }
+
+    public function resetPasswordPrestador($id)
+    {
+        $prestador = Prestador::findOrFail($id);
+        $user = $prestador->user;
+        $user->password = Hash::make($user->username);
+        $user->save();
+
+        return response()->json([
+            'success' => true,
+            'message' => "Contraseña restaurada al usuario/CUIT ({$user->username}).",
         ]);
     }
 

@@ -49,12 +49,14 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/socios', [AdminController::class, 'storeSocio']);
         Route::put('/socios/{id}', [AdminController::class, 'updateSocio']);
         Route::delete('/socios/{id}', [AdminController::class, 'destroySocio']);
+        Route::post('/socios/{id}/reset-password', [AdminController::class, 'resetPasswordSocio']);
 
         // Prestadores CRUD
         Route::get('/prestadores', [AdminController::class, 'indexPrestadores']);
         Route::post('/prestadores', [AdminController::class, 'storePrestador']);
         Route::put('/prestadores/{id}', [AdminController::class, 'updatePrestador']);
         Route::delete('/prestadores/{id}', [AdminController::class, 'destroyPrestador']);
+        Route::post('/prestadores/{id}/reset-password', [AdminController::class, 'resetPasswordPrestador']);
 
         // Acreditaciones
         Route::post('/acreditaciones/masiva', [AdminController::class, 'acreditacionMasiva']);
