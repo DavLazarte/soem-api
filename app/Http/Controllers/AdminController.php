@@ -329,12 +329,12 @@ class AdminController extends Controller
     {
         $prestador = Prestador::findOrFail($id);
         $user = $prestador->user;
-        $user->password = Hash::make($user->username);
+        $user->password = Hash::make('prestador.123');
         $user->save();
 
         return response()->json([
             'success' => true,
-            'message' => "Contraseña restaurada al usuario/CUIT ({$user->username}).",
+            'message' => "Contraseña restaurada a 'prestador.123'.",
         ]);
     }
 
