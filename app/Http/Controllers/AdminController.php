@@ -346,14 +346,16 @@ class AdminController extends Controller
             'monto' => 'required|numeric|min:0.01',
             'socio_ids' => 'required|array|min:1',
             'socio_ids.*' => 'integer|exists:socios,id',
+            'descontar_cuotas' => 'nullable|boolean',
         ]);
 
         $periodo = Periodo::actual();
         $admin   = $request->user();
         $monto   = $request->monto;
         $ids     = $request->socio_ids;
+        $descontarCuotas = $request->boolean('descontar_cuotas', true);
 
-        $result = DB::transaction(function () use ($monto, $periodo, $admin, $ids) {
+        $result = DB::transaction(function () use ($monto, $periodo, $admin, $ids, $descontarCuotas) {
             $socios = Socio::whereIn('id', $ids)->get();
             $cuotasCobradas = 0;
 
@@ -373,40 +375,42 @@ class AdminController extends Controller
                 $socio->increment('saldo_disponible', $monto);
                 $socio->save(); // save saldo_anterior
 
-                // ── AUTO-COBRO de cuotas de compra pendientes del período ──
-                $cuotasPendientes = Cuota::where('estado', 'pendiente')
-                    ->whereHas('transaccion', fn($q) => $q->where('socio_id', $socio->id))
-                    ->where('periodo_id', $periodo->id)
-                    ->with('transaccion.prestador')
-                    ->get();
+                if ($descontarCuotas) {
+                    // ── AUTO-COBRO de cuotas de compra pendientes del período ──
+                    $cuotasPendientes = Cuota::where('estado', 'pendiente')
+                        ->whereHas('transaccion', fn($q) => $q->where('socio_id', $socio->id))
+                        ->where('periodo_id', $periodo->id)
+                        ->with('transaccion.prestador')
+                        ->get();
 
-                foreach ($cuotasPendientes as $cuota) {
-                    if ($socio->saldo_disponible >= $cuota->monto) {
-                        $socio->decrement('saldo_disponible', $cuota->monto);
-                        $cuota->update([
-                            'estado'    => 'cobrada',
-                            'cobrada_en' => now(),
-                        ]);
-                        $cuotasCobradas++;
+                    foreach ($cuotasPendientes as $cuota) {
+                        if ($socio->saldo_disponible >= $cuota->monto) {
+                            $socio->decrement('saldo_disponible', $cuota->monto);
+                            $cuota->update([
+                                'estado'    => 'cobrada',
+                                'cobrada_en' => now(),
+                            ]);
+                            $cuotasCobradas++;
+                        }
                     }
-                }
 
-                // ── AUTO-MARCAR cuotas de préstamo del período como pagadas ──
-                CuotaPrestamo::where('estado', 'pendiente')
-                    ->where('periodo_id', $periodo->id)
-                    ->whereHas('prestamo', fn($q) => $q->where('socio_id', $socio->id))
-                    ->update([
-                        'estado'    => 'pagada',
-                        'pagada_en' => now(),
-                    ]);
+                    // ── AUTO-MARCAR cuotas de préstamo del período como pagadas ──
+                    CuotaPrestamo::where('estado', 'pendiente')
+                        ->where('periodo_id', $periodo->id)
+                        ->whereHas('prestamo', fn($q) => $q->where('socio_id', $socio->id))
+                        ->update([
+                            'estado'    => 'pagada',
+                            'pagada_en' => now(),
+                        ]);
 
-                // Actualizar estado de préstamos si se completaron todas las cuotas
-                $prestamosVigentes = Prestamo::where('socio_id', $socio->id)
-                    ->where('estado', 'vigente')
-                    ->get();
+                    // Actualizar estado de préstamos si se completaron todas las cuotas
+                    $prestamosVigentes = Prestamo::where('socio_id', $socio->id)
+                        ->where('estado', 'vigente')
+                        ->get();
 
-                foreach ($prestamosVigentes as $prestamo) {
-                    $prestamo->actualizarEstado();
+                    foreach ($prestamosVigentes as $prestamo) {
+                        $prestamo->actualizarEstado();
+                    }
                 }
             }
 
