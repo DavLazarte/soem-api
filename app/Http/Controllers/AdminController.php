@@ -563,15 +563,29 @@ class AdminController extends Controller
         DB::transaction(function () use ($transaccion) {
             $socio = $transaccion->socio;
 
-            // Restore saldo
-            $socio->increment('saldo_disponible', $transaccion->monto_total);
+            // Restore saldo and cancel cuotas correctly depending on if it's installments or single payment
+            if ($transaccion->es_cuotas) {
+                // Only refund cuotas that were actually charged to the user's balance
+                $cuotasCobradas = $transaccion->cuotas()->whereNotNull('cobrada_en')->get();
+                $montoADevolver = $cuotasCobradas->sum('monto');
+                
+                if ($montoADevolver > 0) {
+                    $socio->increment('saldo_disponible', $montoADevolver);
+                }
+
+                // Update all cuotas (pending and charged) to 'anulada'
+                $transaccion->cuotas()->update(['estado' => 'anulada']);
+            } else {
+                $montoADevolver = $transaccion->monto_total;
+                $socio->increment('saldo_disponible', $montoADevolver);
+            }
 
             // Audit log
             AuditLog::registrar(
                 'anulacion_transaccion',
                 $transaccion,
                 ['estado' => $transaccion->estado, 'monto_total' => $transaccion->monto_total],
-                ['estado' => 'anulada']
+                ['estado' => 'anulada', 'monto_devuelto' => $montoADevolver]
             );
 
             $transaccion->update([
@@ -579,13 +593,6 @@ class AdminController extends Controller
                 'anulada_por'      => auth()->id(),
                 'motivo_anulacion' => 'Anulada por administrador',
             ]);
-
-            // If installments, cancel pending cuotas
-            if ($transaccion->es_cuotas) {
-                $transaccion->cuotas()
-                    ->where('estado', 'pendiente')
-                    ->update(['estado' => 'anulada']);
-            }
         });
 
         $transaccion->load(['socio:id,nombre,apellido,legajo', 'prestador:id,nombre']);

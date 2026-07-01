@@ -64,36 +64,35 @@ class SocioController extends Controller
 
         // ── Compras de 1 pago (excluir tipo='manual' que son cargas viejas) ──
         foreach ($socio->transacciones()->where('es_cuotas', false)->with('prestador')->get() as $t) {
+            $movs->push([
+                'id'     => 't_'.$t->id,
+                'tipo'   => 'compra',
+                'titulo' => 'Compra en ' . ($t->prestador->nombre ?? 'Negocio'),
+                'monto'  => $t->monto_total,
+                'signo'  => '-',
+                'estado' => $t->estado,
+                'fecha'  => $t->created_at->toIso8601String(),
+                'detalle' => $t->detalle,
+            ]);
+
             if ($t->estado === 'anulada') {
-                // Mostrar anulación con devolución
                 $movs->push([
                     'id'     => 't_anul_'.$t->id,
                     'tipo'   => 'acreditacion',
-                    'titulo' => 'Devolución de ' . ($t->prestador->nombre ?? 'Negocio'),
+                    'titulo' => 'Reintegro por anulación (' . ($t->prestador->nombre ?? 'Negocio') . ')',
                     'monto'  => $t->monto_total,
                     'signo'  => '+',
                     'estado' => 'devuelto',
                     'fecha'  => $t->updated_at->toIso8601String(),
                     'detalle' => $t->motivo_anulacion ? 'Motivo: ' . $t->motivo_anulacion : null,
                 ]);
-            } else {
-                $movs->push([
-                    'id'     => 't_'.$t->id,
-                    'tipo'   => 'compra',
-                    'titulo' => 'Compra en ' . ($t->prestador->nombre ?? 'Negocio'),
-                    'monto'  => $t->monto_total,
-                    'signo'  => '-',
-                    'estado' => $t->estado,
-                    'fecha'  => $t->created_at->toIso8601String(),
-                    'detalle' => $t->detalle,
-                ]);
             }
         }
 
-        // ── Cuotas cobradas ──
+        // ── Cuotas cobradas (o cobradas que luego fueron anuladas) ──
         $cuotas = \App\Models\Cuota::whereHas('transaccion', function($q) use ($socio) {
             $q->where('socio_id', $socio->id);
-        })->where('estado', 'cobrada')->with('transaccion.prestador', 'periodo')->get();
+        })->whereNotNull('cobrada_en')->with('transaccion.prestador', 'periodo')->get();
 
         foreach ($cuotas as $c) {
             $movs->push([
@@ -102,9 +101,21 @@ class SocioController extends Controller
                 'titulo' => 'Cuota ' . $c->nro_cuota . ' - ' . ($c->transaccion->prestador->nombre ?? 'Negocio'),
                 'monto'  => $c->monto,
                 'signo'  => '-',
-                'estado' => 'cobrada',
-                'fecha'  => ($c->cobrada_en ? \Carbon\Carbon::parse($c->cobrada_en) : $c->updated_at)->toIso8601String(),
+                'estado' => $c->estado,
+                'fecha'  => \Carbon\Carbon::parse($c->cobrada_en)->toIso8601String(),
             ]);
+
+            if ($c->estado === 'anulada') {
+                $movs->push([
+                    'id'     => 'c_anul_'.$c->id,
+                    'tipo'   => 'acreditacion',
+                    'titulo' => 'Reintegro cuota ' . $c->nro_cuota . ' (' . ($c->transaccion->prestador->nombre ?? 'Negocio') . ')',
+                    'monto'  => $c->monto,
+                    'signo'  => '+',
+                    'estado' => 'devuelto',
+                    'fecha'  => $c->updated_at->toIso8601String(),
+                ]);
+            }
         }
 
         // ── Ajustes por edición de ventas (usando AuditLog) ──

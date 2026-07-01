@@ -355,14 +355,13 @@ class PrestadorController extends Controller
             if ($transaccion->es_cuotas) {
                 // Solo devolver las cuotas ya cobradas
                 $montoCobrado = $transaccion->cuotas()
-                    ->where('estado', 'cobrada')
+                    ->whereNotNull('cobrada_en')
                     ->sum('monto');
                 if ($montoCobrado > 0) {
                     $socio->increment('saldo_disponible', $montoCobrado);
                 }
-                // Anular cuotas pendientes
+                // Anular todas las cuotas (pendientes y cobradas)
                 $transaccion->cuotas()
-                    ->where('estado', 'pendiente')
                     ->update(['estado' => 'anulada']);
             } else {
                 $socio->increment('saldo_disponible', $transaccion->monto_total);
