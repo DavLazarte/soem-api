@@ -32,13 +32,16 @@ class User extends Authenticatable
     ];
 
     // Roles
-    const ROLE_ADMIN     = 'admin';
-    const ROLE_SOCIO     = 'socio';
-    const ROLE_PRESTADOR = 'prestador';
+    const ROLE_ADMIN        = 'admin';
+    const ROLE_SOCIO        = 'socio';
+    const ROLE_PRESTADOR    = 'prestador';
+    const ROLE_ADMIN_SOCIOS = 'admin_socios';
 
-    public function isAdmin()     { return $this->role === self::ROLE_ADMIN; }
-    public function isSocio()     { return $this->role === self::ROLE_SOCIO; }
-    public function isPrestador() { return $this->role === self::ROLE_PRESTADOR; }
+    public function isAdmin()       { return $this->role === self::ROLE_ADMIN; }
+    public function isSocio()       { return $this->role === self::ROLE_SOCIO; }
+    public function isPrestador()   { return $this->role === self::ROLE_PRESTADOR; }
+    public function isAdminSocios() { return $this->role === self::ROLE_ADMIN_SOCIOS; }
+    public function isAnyAdmin()    { return in_array($this->role, [self::ROLE_ADMIN, self::ROLE_ADMIN_SOCIOS]); }
 
     // Relaciones
     public function socio()

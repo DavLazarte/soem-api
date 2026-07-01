@@ -38,12 +38,12 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('/perfil', [PrestadorController::class, 'updatePerfil']);
     });
 
-    // ─── ADMIN ───────────────────────────────────────────────────
-    Route::middleware('role:admin')->prefix('admin')->group(function () {
-        // Dashboard
+    // ─── ADMIN (shared: admin + admin_socios) ─────────────────────
+    Route::middleware('role:admin,admin_socios')->prefix('admin')->group(function () {
+        // Dashboard (returns limited data for admin_socios)
         Route::get('/dashboard', [AdminController::class, 'dashboard']);
 
-        // Socios CRUD
+        // Socios CRUD (accesible por ambos roles)
         Route::get('/socios/next-legajo', [AdminController::class, 'nextLegajo']);
         Route::get('/socios', [AdminController::class, 'indexSocios']);
         Route::post('/socios', [AdminController::class, 'storeSocio']);
@@ -51,6 +51,12 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::delete('/socios/{id}', [AdminController::class, 'destroySocio']);
         Route::post('/socios/{id}/reset-password', [AdminController::class, 'resetPasswordSocio']);
 
+        // Cambiar contraseña propia
+        Route::put('/password', [AdminController::class, 'updateOwnPassword']);
+    });
+
+    // ─── ADMIN (solo superadmin) ─────────────────────────────────
+    Route::middleware('role:admin')->prefix('admin')->group(function () {
         // Prestadores CRUD
         Route::get('/prestadores', [AdminController::class, 'indexPrestadores']);
         Route::post('/prestadores', [AdminController::class, 'storePrestador']);
@@ -81,5 +87,10 @@ Route::middleware('auth:sanctum')->group(function () {
         // Settings
         Route::get('/settings', [AdminController::class, 'getSettings']);
         Route::put('/settings', [AdminController::class, 'updateSettings']);
+
+        // Gestión de usuarios admin
+        Route::get('/usuarios', [AdminController::class, 'indexUsuarios']);
+        Route::post('/usuarios', [AdminController::class, 'storeUsuario']);
+        Route::delete('/usuarios/{id}', [AdminController::class, 'destroyUsuario']);
     });
 });

@@ -837,4 +837,85 @@ class AdminController extends Controller
             'data'    => Setting::all(),
         ]);
     }
+
+    // ─── GESTIÓN DE USUARIOS ADMIN ───────────────────────────────
+
+    public function updateOwnPassword(Request $request)
+    {
+        $request->validate([
+            'current_password' => 'required|string',
+            'new_password'     => 'required|string|min:6|confirmed',
+        ]);
+
+        $user = $request->user();
+
+        if (!Hash::check($request->current_password, $user->password)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'La contraseña actual es incorrecta.',
+            ], 422);
+        }
+
+        $user->password = Hash::make($request->new_password);
+        $user->save();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Contraseña actualizada correctamente.',
+        ]);
+    }
+
+    public function indexUsuarios()
+    {
+        $usuarios = User::whereIn('role', ['admin', 'admin_socios'])
+            ->orderBy('name')
+            ->get(['id', 'name', 'username', 'email', 'role', 'estado', 'created_at']);
+
+        return response()->json([
+            'success' => true,
+            'data'    => $usuarios,
+        ]);
+    }
+
+    public function storeUsuario(Request $request)
+    {
+        $request->validate([
+            'name'     => 'required|string|max:255',
+            'username' => 'required|string|unique:users,username',
+            'password' => 'required|string|min:6',
+            'role'     => 'required|in:admin,admin_socios',
+        ]);
+
+        $user = User::create([
+            'name'     => $request->name,
+            'username' => $request->username,
+            'password' => Hash::make($request->password),
+            'role'     => $request->role,
+            'estado'   => 'activo',
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'data'    => $user,
+        ], 201);
+    }
+
+    public function destroyUsuario($id)
+    {
+        $user = User::whereIn('role', ['admin', 'admin_socios'])->findOrFail($id);
+
+        if ($user->id === auth()->id()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No podés eliminarte a vos mismo.',
+            ], 422);
+        }
+
+        $user->delete();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Usuario eliminado.',
+        ]);
+    }
 }

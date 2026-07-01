@@ -20,7 +20,10 @@ class PrestadorController extends Controller
     {
         $prestador = $request->user()->prestador;
 
-        $transaccionesDelMes = $prestador->transaccionesDelMes();
+        // Default range: current period or current month
+        $periodo = Periodo::actual();
+        $desde = $request->query('desde', $periodo ? $periodo->fecha_inicio : now()->startOfMonth()->toDateString());
+        $hasta = $request->query('hasta', $periodo ? $periodo->fecha_fin : now()->endOfMonth()->toDateString());
 
         $ultimasTransacciones = $prestador->transacciones()
             ->with('socio:id,nombre,apellido,legajo')
@@ -46,33 +49,36 @@ class PrestadorController extends Controller
             ->limit(50)
             ->get();
 
-        $mesActual = now()->month;
-        $anioActual = now()->year;
-
-        $transaccionesUnPagoMes = Transaccion::where('prestador_id', $prestador->id)
-            ->whereMonth('created_at', $mesActual)
-            ->whereYear('created_at', $anioActual)
+        // Ventas de 1 pago en el rango
+        $ventasUnPago = Transaccion::where('prestador_id', $prestador->id)
+            ->whereDate('created_at', '>=', $desde)
+            ->whereDate('created_at', '<=', $hasta)
             ->where('estado', 'confirmada')
             ->where('es_cuotas', false);
 
-        $cuotasCobradasMesMonto = Cuota::whereHas('transaccion', function($q) use ($prestador) {
+        $cantidadTransacciones = (clone $ventasUnPago)->count();
+
+        // Cuotas cobradas en el rango
+        $cuotasCobradasRangoMonto = Cuota::whereHas('transaccion', function($q) use ($prestador) {
                 $q->where('prestador_id', $prestador->id);
             })
-            ->whereMonth('cobrada_en', $mesActual)
-            ->whereYear('cobrada_en', $anioActual)
+            ->whereDate('cobrada_en', '>=', $desde)
+            ->whereDate('cobrada_en', '<=', $hasta)
             ->where('estado', 'cobrada')
             ->sum('monto');
 
-        $total_cobrado = (clone $transaccionesUnPagoMes)->sum('monto_total') + $cuotasCobradasMesMonto;
+        $total_cobrado = (clone $ventasUnPago)->sum('monto_total') + $cuotasCobradasRangoMonto;
 
         return response()->json([
             'success' => true,
             'data'    => [
                 'total_cobrado'          => $total_cobrado,
-                'cantidad_transacciones' => $transaccionesDelMes->count(),
+                'cantidad_transacciones' => $cantidadTransacciones,
                 'transacciones'          => $ultimasTransacciones,
                 'cuotas_pendientes'      => $cuotasPendientes,
                 'cuotas_cobradas'        => $cuotasCobradas,
+                'desde'                  => $desde,
+                'hasta'                  => $hasta,
             ],
         ]);
     }
@@ -128,7 +134,7 @@ class PrestadorController extends Controller
             'socio_id'        => 'required|exists:socios,id',
             'monto_total'     => 'required|numeric|min:0.01',
             'es_cuotas'       => 'required|boolean',
-            'cantidad_cuotas' => 'required_if:es_cuotas,true|integer|min:2|max:24',
+            'cantidad_cuotas' => 'required_if:es_cuotas,true|integer|min:1|max:24',
             'detalle'         => 'nullable|string|max:1000',
             'cobro_diferido'  => 'nullable|boolean',
         ]);
