@@ -22,8 +22,11 @@ class PrestadorController extends Controller
 
         // Default range: current period or current month
         $periodo = Periodo::actual();
-        $desde = $request->query('desde', $periodo ? $periodo->fecha_inicio : now()->startOfMonth()->toDateString());
-        $hasta = $request->query('hasta', $periodo ? $periodo->fecha_fin : now()->endOfMonth()->toDateString());
+        $defaultDesde = $periodo?->fecha_inicio ?? now()->startOfMonth()->toDateString();
+        $defaultHasta = $periodo?->fecha_fin    ?? now()->endOfMonth()->toDateString();
+
+        $desde = $request->query('desde', $defaultDesde) ?: $defaultDesde;
+        $hasta = $request->query('hasta', $defaultHasta) ?: $defaultHasta;
 
         $ultimasTransacciones = $prestador->transacciones()
             ->with('socio:id,nombre,apellido,legajo')
