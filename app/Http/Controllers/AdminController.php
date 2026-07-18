@@ -86,7 +86,8 @@ class AdminController extends Controller
         }
 
         if ($request->boolean('unpaginated')) {
-            $socios = $query->orderBy('apellido')->get();
+            // Para acreditaciones: solo socios activos
+            $socios = $query->where('estado', 'activo')->orderBy('apellido')->get();
         } else {
             $socios = $query->orderBy('apellido')->paginate(15);
         }

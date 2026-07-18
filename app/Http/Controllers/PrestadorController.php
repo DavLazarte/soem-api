@@ -469,6 +469,47 @@ class PrestadorController extends Controller
     }
 
     /**
+     * List all collected cuotas for this prestador with date filters.
+     */
+    public function cuotasCobradas(Request $request)
+    {
+        $prestador = $request->user()->prestador;
+
+        $query = Cuota::where('estado', 'cobrada')
+            ->whereHas('transaccion', function($q) use ($prestador) {
+                $q->where('prestador_id', $prestador->id);
+            })
+            ->with(['transaccion.socio:id,nombre,apellido,legajo', 'periodo:id,nombre']);
+
+        if ($request->filled('search')) {
+            $search = $request->search;
+            $query->whereHas('transaccion.socio', function($q) use ($search) {
+                $q->where('nombre', 'like', "%{$search}%")
+                  ->orWhere('apellido', 'like', "%{$search}%")
+                  ->orWhere('legajo', 'like', "%{$search}%");
+            });
+        }
+
+        if ($request->filled('fecha_desde')) {
+            $query->whereDate('cobrada_en', '>=', $request->fecha_desde);
+        }
+        if ($request->filled('fecha_hasta')) {
+            $query->whereDate('cobrada_en', '<=', $request->fecha_hasta);
+        }
+
+        if ($request->boolean('unpaginated')) {
+            $cuotas = $query->orderByDesc('cobrada_en')->get();
+        } else {
+            $cuotas = $query->orderByDesc('cobrada_en')->paginate(20);
+        }
+
+        return response()->json([
+            'success' => true,
+            'data'    => $cuotas,
+        ]);
+    }
+
+    /**
      * Charge multiple pending cuotas (bulk processing).
      */
     public function cobrarCuotasMasivo(Request $request)
