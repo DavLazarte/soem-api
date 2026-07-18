@@ -347,6 +347,7 @@ class AdminController extends Controller
             'socio_ids' => 'required|array|min:1',
             'socio_ids.*' => 'integer|exists:socios,id',
             'descontar_cuotas' => 'nullable|boolean',
+            'pisar_saldo' => 'nullable|boolean',
         ]);
 
         $periodo = Periodo::actual();
@@ -354,8 +355,9 @@ class AdminController extends Controller
         $monto   = $request->monto;
         $ids     = $request->socio_ids;
         $descontarCuotas = $request->boolean('descontar_cuotas', true);
+        $pisarSaldo = $request->boolean('pisar_saldo', false);
 
-        $result = DB::transaction(function () use ($monto, $periodo, $admin, $ids, $descontarCuotas) {
+        $result = DB::transaction(function () use ($monto, $periodo, $admin, $ids, $descontarCuotas, $pisarSaldo) {
             $socios = Socio::whereIn('id', $ids)->get();
             $cuotasCobradas = 0;
 
@@ -363,17 +365,28 @@ class AdminController extends Controller
                 // Guardar saldo anterior antes de acreditar
                 $socio->saldo_anterior = $socio->saldo_disponible;
 
-                // Acreditar
+                // Calcular monto real acreditado (diferencia si es pisa)
+                $montoAcreditado = $pisarSaldo
+                    ? ($monto - $socio->saldo_disponible) // puede ser negativo si el saldo actual es mayor
+                    : $monto;
+
                 Acreditacion::create([
-                    'socio_id'      => $socio->id,
-                    'periodo_id'    => $periodo->id,
-                    'monto'         => $monto,
-                    'estado'        => 'acreditado',
+                    'socio_id'       => $socio->id,
+                    'periodo_id'     => $periodo->id,
+                    'monto'          => $monto,
+                    'estado'         => 'acreditado',
                     'acreditado_por' => $admin->id,
                 ]);
 
-                $socio->increment('saldo_disponible', $monto);
-                $socio->save(); // save saldo_anterior
+                if ($pisarSaldo) {
+                    // Pisar: el saldo queda exactamente en $monto sin importar lo que había
+                    $socio->saldo_disponible = $monto;
+                    $socio->save();
+                } else {
+                    // Acumulativo: suma el monto al saldo actual
+                    $socio->increment('saldo_disponible', $monto);
+                    $socio->save(); // save saldo_anterior
+                }
 
                 if ($descontarCuotas) {
                     // ── AUTO-COBRO de cuotas de compra pendientes del período ──
