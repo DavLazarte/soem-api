@@ -349,30 +349,43 @@ class PrestadorController extends Controller
 
         $request->validate([
             'motivo_anulacion' => 'required|string|max:500',
+            'devolver_saldo'   => 'boolean',
         ]);
 
-        DB::transaction(function () use ($transaccion, $request) {
+        $devolverSaldo = $request->input('devolver_saldo', true);
+
+        DB::transaction(function () use ($transaccion, $request, $devolverSaldo) {
             $socio = $transaccion->socio;
 
             // Devolver saldo al socio
-            if ($transaccion->es_cuotas) {
-                // Solo devolver las cuotas ya cobradas
-                $montoCobrado = $transaccion->cuotas()
-                    ->whereNotNull('cobrada_en')
-                    ->sum('monto');
-                if ($montoCobrado > 0) {
-                    $socio->increment('saldo_disponible', $montoCobrado);
+            if ($devolverSaldo) {
+                if ($transaccion->es_cuotas) {
+                    // Solo devolver las cuotas ya cobradas
+                    $montoCobrado = $transaccion->cuotas()
+                        ->whereNotNull('cobrada_en')
+                        ->sum('monto');
+                    if ($montoCobrado > 0) {
+                        $socio->increment('saldo_disponible', $montoCobrado);
+                    }
+                } else {
+                    $socio->increment('saldo_disponible', $transaccion->monto_total);
                 }
-                // Anular todas las cuotas (pendientes y cobradas)
+            }
+
+            if ($transaccion->es_cuotas) {
+                // Anular todas las cuotas (pendientes y cobradas) independientemente de si devolvió saldo
                 $transaccion->cuotas()
                     ->update(['estado' => 'anulada']);
-            } else {
-                $socio->increment('saldo_disponible', $transaccion->monto_total);
+            }
+
+            $motivoFinal = $request->motivo_anulacion;
+            if (!$devolverSaldo) {
+                $motivoFinal .= ' (Sin reintegro)';
             }
 
             $transaccion->update([
                 'estado'           => 'anulada',
-                'motivo_anulacion' => $request->motivo_anulacion,
+                'motivo_anulacion' => $motivoFinal,
                 'anulada_por'      => $request->user()->id,
             ]);
         });
@@ -627,6 +640,71 @@ class PrestadorController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Cuota cobrada exitosamente.',
+            'data'    => $cuota,
+        ]);
+    }
+
+    /**
+     * Anular una cuota cobrada (o revertirla a pendiente).
+     */
+    public function anularCuota(Request $request, $id)
+    {
+        $prestador = $request->user()->prestador;
+
+        $cuota = Cuota::where('id', $id)
+            ->where('estado', 'cobrada')
+            ->whereHas('transaccion', function($q) use ($prestador) {
+                $q->where('prestador_id', $prestador->id);
+            })
+            ->with('transaccion.socio')
+            ->firstOrFail();
+
+        $request->validate([
+            'motivo_anulacion' => 'required|string|max:500',
+            'nuevo_estado'     => 'required|in:pendiente,anulada',
+            'devolver_saldo'   => 'boolean',
+        ]);
+
+        $devolverSaldo = $request->input('devolver_saldo', true);
+        $nuevoEstado = $request->input('nuevo_estado');
+        $motivo = $request->input('motivo_anulacion');
+
+        DB::transaction(function () use ($cuota, $devolverSaldo, $nuevoEstado, $motivo, $request) {
+            if ($devolverSaldo) {
+                $socio = $cuota->transaccion->socio;
+                $socio->increment('saldo_disponible', $cuota->monto);
+            }
+
+            // Log de auditoría
+            AuditLog::create([
+                'user_id'         => $request->user()->id,
+                'accion'          => 'anular_cuota',
+                'modelo'          => 'Cuota',
+                'modelo_id'       => $cuota->id,
+                'valores_antes'   => ['estado' => 'cobrada'],
+                'valores_despues' => [
+                    'estado'           => $nuevoEstado,
+                    'motivo_anulacion' => $motivo,
+                    'devolver_saldo'   => $devolverSaldo
+                ],
+                'ip'              => $request->ip(),
+            ]);
+
+            $motivoFinal = $motivo;
+            if (!$devolverSaldo) {
+                $motivoFinal .= ' (Sin reintegro)';
+            }
+
+            $cuota->update([
+                'estado'           => $nuevoEstado,
+                'cobrada_en'       => null,
+                'motivo_anulacion' => $motivoFinal,
+            ]);
+        });
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Cobro de cuota anulado exitosamente.',
             'data'    => $cuota,
         ]);
     }

@@ -76,47 +76,103 @@ class SocioController extends Controller
             ]);
 
             if ($t->estado === 'anulada') {
+                $sinReintegro = str_contains($t->motivo_anulacion ?? '', '(Sin reintegro)');
                 $movs->push([
                     'id'     => 't_anul_'.$t->id,
                     'tipo'   => 'acreditacion',
-                    'titulo' => 'Reintegro por anulación (' . ($t->prestador->nombre ?? 'Negocio') . ')',
-                    'monto'  => $t->monto_total,
-                    'signo'  => '+',
-                    'estado' => 'devuelto',
+                    'titulo' => $sinReintegro 
+                                ? 'Anulación de compra sin reintegro (' . ($t->prestador->nombre ?? 'Negocio') . ')'
+                                : 'Reintegro por anulación (' . ($t->prestador->nombre ?? 'Negocio') . ')',
+                    'monto'  => $sinReintegro ? 0 : $t->monto_total,
+                    'signo'  => $sinReintegro ? '' : '+',
+                    'estado' => $sinReintegro ? 'aplicado' : 'devuelto',
                     'fecha'  => $t->updated_at->toIso8601String(),
-                    'detalle' => $t->motivo_anulacion ? 'Motivo: ' . $t->motivo_anulacion : null,
+                    'detalle' => $t->motivo_anulacion ? 'Motivo: ' . str_replace(' (Sin reintegro)', '', $t->motivo_anulacion) : null,
                 ]);
             }
         }
 
         // ── Cuotas cobradas (o cobradas que luego fueron anuladas) ──
-        $cuotas = \App\Models\Cuota::whereHas('transaccion', function($q) use ($socio) {
+        $cuotasBaseQuery = \App\Models\Cuota::whereHas('transaccion', function($q) use ($socio) {
             $q->where('socio_id', $socio->id);
-        })->whereNotNull('cobrada_en')->with('transaccion.prestador', 'periodo')->get();
+        });
+
+        $socioCuotasIds = (clone $cuotasBaseQuery)->pluck('id');
+
+        // Logs de anulación de cuotas individuales
+        $logsAnulacionCuotas = \App\Models\AuditLog::where('accion', 'anular_cuota')
+            ->where('modelo', 'Cuota')
+            ->whereIn('modelo_id', $socioCuotasIds)
+            ->get()
+            ->keyBy('modelo_id');
+
+        $cuotas = (clone $cuotasBaseQuery)
+            ->where(function($q) use ($logsAnulacionCuotas) {
+                $q->whereNotNull('cobrada_en')
+                  ->orWhereIn('id', $logsAnulacionCuotas->keys());
+            })
+            ->with('transaccion.prestador', 'periodo')
+            ->get();
 
         foreach ($cuotas as $c) {
-            $movs->push([
-                'id'     => 'c_'.$c->id,
-                'tipo'   => 'cuota',
-                'titulo' => 'Cuota ' . $c->nro_cuota . ' - ' . ($c->transaccion->prestador->nombre ?? 'Negocio'),
-                'monto'  => $c->monto,
-                'signo'  => '-',
-                'estado' => $c->estado,
-                'fecha'  => \Carbon\Carbon::parse($c->cobrada_en)->toIso8601String(),
-            ]);
+            $logAnulacion = $logsAnulacionCuotas->get($c->id);
+            
+            // Determinar la fecha en que se cobró realmente (si se anuló individualmente, cobrada_en es null, 
+            // pero lo tenemos en valores_antes del log)
+            $fechaCobroOriginal = $c->cobrada_en;
+            if (!$fechaCobroOriginal && $logAnulacion && isset($logAnulacion->valores_antes['cobrada_en'])) {
+                $fechaCobroOriginal = \Carbon\Carbon::parse($logAnulacion->valores_antes['cobrada_en']);
+            }
 
-            if ($c->estado === 'anulada') {
+            // Movimiento de CARGO (cuando se cobró)
+            if ($fechaCobroOriginal) {
+                $movs->push([
+                    'id'     => 'c_'.$c->id,
+                    'tipo'   => 'cuota',
+                    'titulo' => 'Cuota ' . $c->nro_cuota . ' - ' . ($c->transaccion->prestador->nombre ?? 'Negocio'),
+                    'monto'  => $c->monto,
+                    'signo'  => '-',
+                    'estado' => $c->estado === 'anulada' ? 'anulada' : $c->estado,
+                    'fecha'  => \Carbon\Carbon::parse($fechaCobroOriginal)->toIso8601String(),
+                ]);
+            }
+
+            // Movimiento de REINTEGRO / ANULACIÓN (si fue anulada)
+            if ($c->estado === 'anulada' || $logAnulacion) {
+                $nombreNegocio = $c->transaccion->prestador->nombre ?? 'Negocio';
+                
+                $sinReintegro = false;
+                $motivo = null;
+                $fechaAnulacion = $c->updated_at->toIso8601String();
+
+                // 1. ¿Fue anulada individualmente?
+                if ($logAnulacion) {
+                    $sinReintegro = !($logAnulacion->valores_despues['devolver_saldo'] ?? true);
+                    $motivo = $logAnulacion->valores_despues['motivo_anulacion'] ?? null;
+                    $fechaAnulacion = $logAnulacion->created_at->toIso8601String();
+                } else {
+                    // 2. ¿Fue anulada porque se anuló toda la venta?
+                    if ($c->transaccion && $c->transaccion->estado === 'anulada') {
+                        $sinReintegro = str_contains($c->transaccion->motivo_anulacion ?? '', '(Sin reintegro)');
+                        $motivo = $c->transaccion->motivo_anulacion;
+                    }
+                }
+
                 $movs->push([
                     'id'     => 'c_anul_'.$c->id,
                     'tipo'   => 'acreditacion',
-                    'titulo' => 'Reintegro cuota ' . $c->nro_cuota . ' (' . ($c->transaccion->prestador->nombre ?? 'Negocio') . ')',
-                    'monto'  => $c->monto,
-                    'signo'  => '+',
-                    'estado' => 'devuelto',
-                    'fecha'  => $c->updated_at->toIso8601String(),
+                    'titulo' => $sinReintegro 
+                                ? 'Anulación de cuota ' . $c->nro_cuota . ' sin reintegro (' . $nombreNegocio . ')'
+                                : 'Reintegro cuota ' . $c->nro_cuota . ' (' . $nombreNegocio . ')',
+                    'monto'  => $sinReintegro ? 0 : $c->monto,
+                    'signo'  => $sinReintegro ? '' : '+',
+                    'estado' => $sinReintegro ? 'aplicado' : 'devuelto',
+                    'fecha'  => $fechaAnulacion,
+                    'detalle' => $motivo ? 'Motivo: ' . str_replace(' (Sin reintegro)', '', $motivo) : null,
                 ]);
             }
         }
+
 
         // ── Ajustes por edición de ventas (usando AuditLog) ──
         $transaccionIds = \App\Models\Transaccion::where('socio_id', $socio->id)->pluck('id');
