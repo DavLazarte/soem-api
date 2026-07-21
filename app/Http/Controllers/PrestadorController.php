@@ -242,11 +242,16 @@ class PrestadorController extends Controller
         $request->validate([
             'monto_total'    => 'required|numeric|min:0.01',
             'motivo_edicion' => 'required|string|max:1000',
+            'fecha_creacion' => 'nullable|date',
         ]);
 
         $montoAnterior = (float) $transaccion->monto_total;
         $montoNuevo    = (float) $request->monto_total;
         $diferencia    = $montoNuevo - $montoAnterior;
+
+        $fechaAnterior = $transaccion->created_at;
+        $fechaNueva = $request->filled('fecha_creacion') ? \Carbon\Carbon::parse($request->fecha_creacion) : $fechaAnterior;
+        $cambioFecha = $fechaNueva->format('Y-m-d H:i') !== $fechaAnterior->format('Y-m-d H:i');
 
         $socio = $transaccion->socio;
 
@@ -258,7 +263,7 @@ class PrestadorController extends Controller
             ], 422);
         }
 
-        DB::transaction(function () use ($transaccion, $socio, $montoAnterior, $montoNuevo, $diferencia) {
+        DB::transaction(function () use ($transaccion, $socio, $montoAnterior, $montoNuevo, $diferencia, $fechaAnterior, $fechaNueva, $cambioFecha) {
             // Adjust saldo: if monto increased, deduct difference; if decreased, restore difference
             if ($diferencia > 0) {
                 $socio->decrement('saldo_disponible', $diferencia);
@@ -266,19 +271,37 @@ class PrestadorController extends Controller
                 $socio->increment('saldo_disponible', abs($diferencia));
             }
 
-            // Create audit log with before/after
-            AuditLog::registrar(
-                'edicion_transaccion',
-                $transaccion,
-                ['monto_total' => $montoAnterior],
-                ['monto_total' => $montoNuevo]
-            );
-
-            $transaccion->update([
+            $updateData = [
                 'monto_total'    => $montoNuevo,
                 'editada_por'    => request()->user()->id,
                 'motivo_edicion' => request()->motivo_edicion,
-            ]);
+            ];
+
+            $valoresAntes = ['monto_total' => $montoAnterior];
+            $valoresDespues = ['monto_total' => $montoNuevo];
+
+            if ($cambioFecha) {
+                $periodo = \App\Models\Periodo::firstOrCreate(
+                    ['mes' => $fechaNueva->month, 'anio' => $fechaNueva->year],
+                    ['nombre' => ucfirst($fechaNueva->translatedFormat('F Y')), 'estado' => 'abierto']
+                );
+                
+                $updateData['created_at'] = $fechaNueva;
+                $updateData['periodo_id'] = $periodo->id;
+                
+                $valoresAntes['created_at'] = $fechaAnterior->toDateTimeString();
+                $valoresDespues['created_at'] = $fechaNueva->toDateTimeString();
+            }
+
+            // Create audit log with before/after
+            \App\Models\AuditLog::registrar(
+                'edicion_transaccion',
+                $transaccion,
+                $valoresAntes,
+                $valoresDespues
+            );
+
+            $transaccion->update($updateData);
         });
 
         $transaccion->load(['socio:id,nombre,apellido,legajo', 'prestador:id,nombre']);

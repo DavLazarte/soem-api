@@ -22,7 +22,9 @@ class Transaccion extends Model
         'motivo_anulacion',
         'editada_por',
         'motivo_edicion',
+        'created_at',
     ];
+
 
     protected $casts = [
         'monto_total' => 'decimal:2',
